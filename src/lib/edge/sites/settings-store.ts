@@ -89,6 +89,7 @@ function serializeSiteTrackingConfig(
   const payload: Record<string, unknown> = {
     siteId: settings.siteId,
     siteDomain: settings.siteDomain,
+    limitedAnalytics: settings.limitedAnalytics,
     trackingStrength: settings.trackingStrength,
     trackQueryParams: settings.trackQueryParams,
     trackHash: settings.trackHash,
@@ -128,6 +129,18 @@ function serializeSiteTrackingConfig(
 
   return payload;
 }
+export async function readAuthoritativeLimitedMode(
+  env: Env,
+  siteId: string,
+): Promise<boolean> {
+  const row = await env.DB.prepare(
+    "SELECT 1 AS enabled FROM site_identities si JOIN limited_analytics_retention r ON r.site_pk = si.site_pk WHERE si.site_id = ? AND r.phase != 'deleted'",
+  )
+    .bind(siteId)
+    .first();
+  return Boolean(row);
+}
+
 export async function readSiteScriptSettings(
   env: Env,
   siteId: string,
@@ -193,8 +206,31 @@ export async function upsertSiteTrackingConfig(
     source = applyBlockingRulesPatch(source, input.blockingPatch);
   }
   const normalized = normalizeSiteTrackingConfig(source);
+  if (
+    !normalized.limitedAnalytics &&
+    (existing?.limitedAnalytics ||
+      (await readAuthoritativeLimitedMode(env, normalizedSiteId)))
+  ) {
+    throw new Error(
+      "Limited analytics cannot be disabled on an existing site; remove the tracker to stop collection",
+    );
+  }
   if (!normalized.siteDomain) {
     throw new Error("siteDomain is required");
+  }
+  if (normalized.limitedAnalytics && !existing?.limitedAnalytics) {
+    const stub = env.INGEST_DO.get(env.INGEST_DO.idFromName(normalizedSiteId));
+    const response = await stub.fetch(
+      "https://ingest.internal/enable-limited",
+      {
+        method: "POST",
+        body: JSON.stringify({ siteId: normalizedSiteId }),
+      },
+    );
+    if (!response.ok)
+      throw new Error(
+        "Limited analytics requires a site with no existing or buffered data",
+      );
   }
   const kv = siteSettingsBinding(env);
   await kv.put(

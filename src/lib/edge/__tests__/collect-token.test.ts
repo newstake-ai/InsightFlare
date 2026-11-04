@@ -420,3 +420,33 @@ describe("collect token", () => {
     ).resolves.toMatchObject({ ok: true });
   });
 });
+
+it("binds limited-mode tokens to the request IP without exposing the IP in the token", async () => {
+  const token = await issueCollectToken({
+    env,
+    siteId: "site-1",
+    ip: "203.0.113.7",
+    nowSeconds: 1000,
+    hideIp: true,
+  });
+  const verified = await verifyCollectToken({
+    env,
+    token,
+    siteId: "site-1",
+    ip: "203.0.113.7",
+    nowSeconds: 1001,
+  });
+  expect(verified).toMatchObject({
+    ok: true,
+    payload: { ip: expect.stringMatching(/^h1:/) },
+  });
+  expect(
+    await verifyCollectToken({
+      env,
+      token,
+      siteId: "site-1",
+      ip: "203.0.113.8",
+      nowSeconds: 1001,
+    }),
+  ).toMatchObject({ ok: false, reason: "collect_token_ip_mismatch" });
+});

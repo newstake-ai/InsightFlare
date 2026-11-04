@@ -4,6 +4,8 @@
 // before the SDK. Do not turn these values into build-time string placeholders:
 // minifiers may constant-fold privacy branches before injection happens.
 
+import { sanitizeLimitedPayload } from "../lib/edge/collector/limited-analytics";
+
 import { initAutoTrack } from "./auto-track";
 import { createPerformanceTracker } from "./performance";
 import type { UaClientHintsResult } from "./ua-client-hints";
@@ -14,6 +16,7 @@ const TRACKER_RUNTIME_CONFIG_KEY = "__insightflare_tracker_runtime_config__";
 interface TrackerRuntimeConfig {
   siteId: string;
   isEUMode: boolean;
+  limitedAnalytics?: boolean;
   trackQueryParams: boolean;
   trackHash: boolean;
   ignoreDoNotTrack: boolean;
@@ -95,11 +98,14 @@ if ((window as any)[INSTALL_KEY]) {
 
 const runtimeConfig = takeRuntimeConfig();
 const SITE_ID = runtimeConfig.siteId;
-const IS_EU_MODE = runtimeConfig.isEUMode;
+const LIMITED_ANALYTICS = runtimeConfig.limitedAnalytics === true;
+const IS_EU_MODE = LIMITED_ANALYTICS || runtimeConfig.isEUMode;
 const TRACK_QUERY_PARAMS = runtimeConfig.trackQueryParams;
 const TRACK_HASH = runtimeConfig.trackHash;
-const IGNORE_DO_NOT_TRACK = runtimeConfig.ignoreDoNotTrack;
-const AUTO_TRACK_OUTBOUND_LINKS = runtimeConfig.autoTrackOutboundLinks;
+const IGNORE_DO_NOT_TRACK =
+  !LIMITED_ANALYTICS && runtimeConfig.ignoreDoNotTrack;
+const AUTO_TRACK_OUTBOUND_LINKS =
+  !LIMITED_ANALYTICS && runtimeConfig.autoTrackOutboundLinks;
 const PERFORMANCE_SAMPLE_RATE = runtimeConfig.performanceSampleRate;
 const SESSION_WINDOW_MS = runtimeConfig.sessionWindowMs;
 const COLLECT_TOKEN = runtimeConfig.collectToken;
@@ -114,6 +120,14 @@ if (!IGNORE_DO_NOT_TRACK) {
   }
 }
 
+if (LIMITED_ANALYTICS) {
+  try {
+    window.localStorage.removeItem(VISITOR_KEY);
+  } catch {
+    // Storage may be unavailable.
+  }
+}
+
 const scriptUrl = new URL(scriptEl.src);
 const collectUrl = new URL("/collect", scriptUrl.origin).toString();
 let visitorId = IS_EU_MODE ? "" : loadOrCreateVisitorId(VISITOR_KEY);
@@ -123,17 +137,19 @@ const performanceTracker = createPerformanceTracker({
 });
 
 const uaClientHintsReady: Promise<UaClientHintsResult | null> =
-  readUaClientHints()
-    .then((hints) => {
-      uaClientHints = hints;
-      uaClientHintsSettled = true;
-      return hints;
-    })
-    .catch(() => {
-      uaClientHints = null;
-      uaClientHintsSettled = true;
-      return null;
-    });
+  LIMITED_ANALYTICS
+    ? Promise.resolve(null)
+    : readUaClientHints()
+        .then((hints) => {
+          uaClientHints = hints;
+          uaClientHintsSettled = true;
+          return hints;
+        })
+        .catch(() => {
+          uaClientHints = null;
+          uaClientHintsSettled = true;
+          return null;
+        });
 
 // ── Core utilities ──
 
@@ -155,6 +171,10 @@ function loadOrCreateVisitorId(visitorKey: string): string {
 }
 
 function rotateVisitorId(): void {
+  if (LIMITED_ANALYTICS) {
+    visitorId = "";
+    return;
+  }
   window.localStorage.removeItem(VISITOR_KEY);
   if (IS_EU_MODE) {
     visitorId = "";
@@ -197,13 +217,12 @@ function send(payload: any, useBeacon: boolean): void {
   let body = "";
   try {
     body = JSON.stringify(
-      withUaClientHints(
-        {
-          ...payload,
-          collectToken: COLLECT_TOKEN,
-        },
-        uaClientHints,
-      ),
+      LIMITED_ANALYTICS
+        ? { ...sanitizeLimitedPayload(payload), collectToken: COLLECT_TOKEN }
+        : withUaClientHints(
+            { ...payload, collectToken: COLLECT_TOKEN },
+            uaClientHints,
+          ),
     );
   } catch {
     return;
@@ -286,8 +305,22 @@ function startVisit(
   );
 }
 
+function expiredLimitedVisit(eventAt: number): boolean {
+  if (!LIMITED_ANALYTICS || !currentVisit) return false;
+  if (leaveSent) return true;
+  if (
+    Math.floor(currentVisit.startedAt / 86400000) ===
+    Math.floor(eventAt / 86400000)
+  )
+    return false;
+  leaveSent = true;
+  pendingHiddenAt = 0;
+  return true;
+}
+
 function endCurrentVisit(exitReason: string, useBeacon: boolean): void {
   if (!currentVisit || leaveSent) return;
+  if (expiredLimitedVisit(Date.now())) return;
   leaveSent = true;
   pendingHiddenAt = 0;
   const eventAt = Date.now();
@@ -325,6 +358,7 @@ function sendVisibility(
   eventAt: number,
 ): void {
   if (!currentVisit || leaveSent) return;
+  if (expiredLimitedVisit(eventAt)) return;
   const url = new URL(currentVisit.href, window.location.href);
   send(
     {
@@ -354,6 +388,7 @@ function handleDocumentHidden(): void {
 function handleDocumentVisible(): void {
   if (!currentVisit || leaveSent || pendingHiddenAt <= 0) return;
   const eventAt = Date.now();
+  if (expiredLimitedVisit(eventAt)) return;
   if (eventAt - pendingHiddenAt > SESSION_WINDOW_MS) {
     const referrerUrl = currentVisit.href;
     if (BUILD_PERFORMANCE) performanceTracker.stop();
@@ -429,6 +464,7 @@ function wrapHistoryMethod(methodName: "pushState" | "replaceState"): void {
 // ── Public API ──
 
 function identify(userId: string, opts?: { name?: string }): void {
+  if (LIMITED_ANALYTICS) return;
   const id = String(userId || "")
     .trim()
     .slice(0, 255);
@@ -469,6 +505,7 @@ function identify(userId: string, opts?: { name?: string }): void {
 }
 
 function reset(): void {
+  if (LIMITED_ANALYTICS) return;
   flushPendingRouteChange();
   if (currentVisit) {
     endCurrentVisit("identity_reset", false);
@@ -518,6 +555,7 @@ function track(eventName: string, eventData?: unknown): void {
     );
   }
   flushPendingRouteChange();
+  if (expiredLimitedVisit(Date.now())) return;
   send(
     {
       ...pagePayloadBase(

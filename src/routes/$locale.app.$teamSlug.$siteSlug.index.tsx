@@ -22,6 +22,7 @@ function SiteOverviewPage() {
   const { locale, messages, siteContext } = Route.useRouteContext();
   return (
     <OverviewClientPage
+      showLimitedHistory
       locale={locale}
       messages={messages}
       siteId={siteContext.activeSite.id}

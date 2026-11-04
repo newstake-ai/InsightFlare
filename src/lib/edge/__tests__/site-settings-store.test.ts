@@ -10,7 +10,10 @@ import {
 } from "@/lib/edge/sites/settings-store";
 import type { Env } from "@/lib/edge/types";
 function envWithKv(kv: Partial<KVNamespace>): Env {
-  return { SITE_SETTINGS_KV: kv as KVNamespace } as Env;
+  return {
+    SITE_SETTINGS_KV: kv as KVNamespace,
+    DB: { prepare: () => ({ bind: () => ({ first: async () => null }) }) },
+  } as unknown as Env;
 }
 function cacheWithResponse(response: Response | null = null) {
   return {

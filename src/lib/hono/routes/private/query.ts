@@ -9,6 +9,7 @@ import {
 } from "@/lib/edge/analytics/interfaces/dashboard/private";
 import { notAllowed } from "@/lib/edge/analytics/interfaces/dashboard/protocol/responses";
 import { DASHBOARD_QUERY_PATHS } from "@/lib/edge/analytics/interfaces/dashboard/protocol/router";
+import { readLimitedHistory } from "@/lib/edge/analytics/limited-history";
 import { dashboardCacheMiddleware } from "@/lib/hono/middleware/dashboard-cache";
 import {
   requireMethodMiddleware,
@@ -75,6 +76,18 @@ privateQueryRoutes.all("/team-dashboard", async (c) => {
     },
   );
 });
+privateQueryRoutes.get(
+  "/limited-history",
+  resolvePrivateSiteMiddleware(),
+  async (c) => {
+    const site = c.get("privateSite");
+    if (!site) throw new Error("private site context missing");
+    const month = requestUrl(c).searchParams.get("month") || "";
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month))
+      return c.json({ error: "Invalid month" }, 400);
+    return c.json(await readLimitedHistory(c.env, site.id, month));
+  },
+);
 privateQueryRoutes.use(
   `/${FUNNEL_PATH}`,
   requireMethodsMiddleware(["GET", "POST", "PATCH", "DELETE"]),

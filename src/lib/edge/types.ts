@@ -111,6 +111,12 @@ export interface IngestEnvelope {
   request: SerializedRequestPayload;
   client: TrackerClientPayload;
   trace?: IngestTracePayload;
+  limited?: {
+    visitorId: string;
+    browser: string;
+    os: string;
+    deviceType: string;
+  };
 }
 
 export interface IngestEnvelopePayload extends IngestEnvelope {
