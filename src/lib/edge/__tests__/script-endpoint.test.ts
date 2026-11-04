@@ -21,6 +21,7 @@ vi.mock("@/lib/edge/sites/settings-store", async () => {
   return {
     ...actual,
     readSiteTrackingConfig: vi.fn(),
+    readAuthoritativeLimitedMode: vi.fn().mockResolvedValue(false),
   };
 });
 

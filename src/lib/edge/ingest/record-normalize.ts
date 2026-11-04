@@ -122,7 +122,9 @@ export async function normalizeIngestRecord(
   const isEU = Boolean(cf.isEUCountry);
 
   let visitorId = clampString(coerceString(client.visitorId), 128);
-  if (isEU || !visitorId) {
+  if (envelope.limited) {
+    visitorId = envelope.limited.visitorId;
+  } else if (isEU || !visitorId) {
     const ip = clampString(
       coerceString(
         requestHeaders["cf-connecting-ip"] ??
@@ -156,11 +158,17 @@ export async function normalizeIngestRecord(
     ),
     asOrganization: clampString(coerceString(cf.asOrganization ?? ""), 255),
     uaRaw,
-    browser: clampString(coerceString(ua.browser.name ?? ""), 80),
+    browser: clampString(
+      coerceString(envelope.limited?.browser ?? ua.browser.name ?? ""),
+      80,
+    ),
     browserVersion: clampString(coerceString(ua.browser.version ?? ""), 80),
-    os: clampString(coerceString(ua.os.name ?? ""), 80),
+    os: clampString(coerceString(envelope.limited?.os ?? ua.os.name ?? ""), 80),
     osVersion: clampString(coerceString(ua.os.version ?? ""), 80),
-    deviceType: clampString(coerceString(ua.device.type ?? "desktop"), 40),
+    deviceType: clampString(
+      coerceString(envelope.limited?.deviceType ?? ua.device.type ?? "desktop"),
+      40,
+    ),
   };
 
   if (kind === "pageview") {

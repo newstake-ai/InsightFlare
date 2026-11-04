@@ -172,6 +172,7 @@ export async function issueCollectToken(input: {
   siteId: string;
   ip: string;
   nowSeconds?: number;
+  hideIp?: boolean;
 }): Promise<string> {
   const secret = await signingSecret(input.env);
   if (!secret) {
@@ -180,10 +181,13 @@ export async function issueCollectToken(input: {
     );
   }
   const now = Math.floor(input.nowSeconds ?? appNow() / 1000);
+  const ip = input.hideIp
+    ? `h1:${base64UrlEncode(await hmacSha256(JSON.stringify(["limited-token-v1", input.siteId, now, normalizeIp(input.ip)]), secret))}`
+    : normalizeIp(input.ip);
   const payload = encodePayload({
     aud: COLLECT_TOKEN_AUDIENCE,
     siteId: input.siteId,
-    ip: normalizeIp(input.ip),
+    ip,
     iat: now,
     exp: now + COLLECT_TOKEN_TTL_SECONDS,
   });
@@ -244,7 +248,10 @@ export async function verifyCollectToken(input: {
   if (payload.siteId !== input.siteId) {
     return { ok: false, reason: "collect_token_site_mismatch" };
   }
-  if (payload.ip !== normalizeIp(input.ip)) {
+  const expectedIp = payload.ip.startsWith("h1:")
+    ? `h1:${base64UrlEncode(await hmacSha256(JSON.stringify(["limited-token-v1", input.siteId, payload.iat, normalizeIp(input.ip)]), secret))}`
+    : normalizeIp(input.ip);
+  if (!bytesEqual(bytes(payload.ip), bytes(expectedIp))) {
     return { ok: false, reason: "collect_token_ip_mismatch" };
   }
 

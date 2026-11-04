@@ -16,6 +16,7 @@ export interface OverviewClientPageProps {
   siteDomain: string;
   pathname: string;
   showSourceLinkTab?: boolean;
+  showLimitedHistory?: boolean;
 }
 
 export type PageCardTab =

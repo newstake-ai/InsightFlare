@@ -147,6 +147,11 @@ async function filterReadableSitesForActor<T extends { id: string }>(
 }
 export async function deleteSiteData(env: Env, siteId: string): Promise<void> {
   const client = database(env);
+  await env.DB.prepare(
+    "UPDATE limited_analytics_retention SET phase = 'deleted', sealed_before_ms = 9007199254740991, processing_day_ms = NULL WHERE site_pk = (SELECT site_pk FROM site_identities WHERE site_id = ?)",
+  )
+    .bind(siteId)
+    .run();
   for (const mutation of siteDeletionMutations(siteId))
     await client.run(mutation);
   try {

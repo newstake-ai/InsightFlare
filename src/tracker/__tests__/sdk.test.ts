@@ -15,6 +15,7 @@ let configuredSdkImportCounter = 0;
 interface ConfiguredSdkOptions {
   siteId?: string;
   isEuMode?: boolean;
+  limitedAnalytics?: boolean;
   trackQueryParams?: boolean;
   trackHash?: boolean;
   ignoreDoNotTrack?: boolean;
@@ -28,6 +29,7 @@ function setRuntimeConfig(options: ConfiguredSdkOptions = {}) {
   (globalThis as Record<string, unknown>)[runtimeConfigKey] = {
     siteId: options.siteId ?? "configured-site",
     isEUMode: options.isEuMode === true,
+    limitedAnalytics: options.limitedAnalytics === true,
     trackQueryParams: options.trackQueryParams !== false,
     trackHash: options.trackHash !== false,
     ignoreDoNotTrack: options.ignoreDoNotTrack !== false,
@@ -661,6 +663,51 @@ describe("Tracker Browser SDK Integration Suite", () => {
     expect(
       window.localStorage.getItem("__insightflare_visitor_configured-site__"),
     ).toBe(visitorId);
+  });
+
+  it("suppresses the expired limited visit until real navigation and clears the legacy key", async () => {
+    const now = vi
+      .spyOn(Date, "now")
+      .mockReturnValue(Date.UTC(2026, 0, 1, 23, 59));
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response("ok"));
+    window.localStorage.setItem(
+      "__insightflare_visitor_configured-site__",
+      "legacy",
+    );
+    window.localStorage.setItem("unrelated", "keep");
+    await importConfiguredSdk({
+      limitedAnalytics: true,
+      buildPerformance: false,
+    });
+    await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
+    expect(window.localStorage.getItem("unrelated")).toBe("keep");
+    expect(
+      window.localStorage.getItem("__insightflare_visitor_configured-site__"),
+    ).toBeNull();
+    const first = decodeFetchBody(fetchSpy);
+    Object.defineProperty(document, "visibilityState", {
+      value: "hidden",
+      configurable: true,
+    });
+    document.dispatchEvent(new Event("visibilitychange"));
+    fetchSpy.mockClear();
+    now.mockReturnValue(Date.UTC(2026, 0, 2, 0, 31));
+    Object.defineProperty(document, "visibilityState", {
+      value: "visible",
+      configurable: true,
+    });
+    document.dispatchEvent(new Event("visibilitychange"));
+    (window as any).__insightflare_tracker_v6__.track("click");
+    window.dispatchEvent(new Event("pagehide"));
+    expect(fetchSpy).not.toHaveBeenCalled();
+    history.pushState({}, "", "/new-page");
+    await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
+    const next = decodeFetchBody(fetchSpy);
+    expect(next.kind).toBe("pageview");
+    expect(next.pathname).toBe("/new-page");
+    expect(next.visitId).not.toBe(first.visitId);
   });
 
   it("should keep EU visitor ids empty through reset without persistent writes", async () => {

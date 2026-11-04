@@ -1,6 +1,7 @@
 export type TrackingStrength = "strong" | "smart" | "weak";
 
 export interface SiteScriptSettings {
+  limitedAnalytics: boolean;
   trackingStrength: TrackingStrength;
   trackQueryParams: boolean;
   trackHash: boolean;
@@ -23,9 +24,10 @@ export type SiteSettingsJsonValue =
 
 export interface SiteSettingsConfig extends Omit<
   SiteScriptSettings,
-  "botProtectionEnabled" | "hostingProxyBlockingEnabled"
+  "botProtectionEnabled" | "hostingProxyBlockingEnabled" | "limitedAnalytics"
 > {
   /** Legacy/raw KV values may omit newly introduced settings. */
+  limitedAnalytics?: boolean;
   botProtectionEnabled?: boolean;
   /** Legacy/raw KV values may omit newly introduced settings. */
   hostingProxyBlockingEnabled?: boolean;
@@ -40,6 +42,7 @@ export interface SiteTrackingConfig extends SiteSettingsConfig {
 }
 
 export const DEFAULT_SITE_SCRIPT_SETTINGS: SiteScriptSettings = {
+  limitedAnalytics: false,
   trackingStrength: "smart",
   trackQueryParams: true,
   trackHash: true,
@@ -205,6 +208,7 @@ export function normalizeSiteScriptSettings(
     ) === false;
 
   return {
+    limitedAnalytics: normalizeBoolean(record.limitedAnalytics, false),
     trackingStrength: normalizeTrackingStrength(
       record.trackingStrength ?? record.trackingMode,
     ),

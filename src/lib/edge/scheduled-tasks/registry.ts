@@ -2,6 +2,16 @@ import type { ScheduledTaskDefinitionInfo } from "@/lib/scheduled-tasks";
 
 export const SCHEDULED_TASKS: ScheduledTaskDefinitionInfo[] = [
   {
+    key: "limited_analytics_retention",
+    name: "Limited analytics retention",
+    description:
+      "Aggregates and removes expired limited analytics details in bounded batches.",
+    schedule: "Every 30 minutes",
+    trigger: "cron",
+    enabled: true,
+    internalSchedule: { kind: "interval", everyMinutes: 30 },
+  },
+  {
     key: "visit_hourly_rollup",
     name: "Hourly visit aggregation",
     description:

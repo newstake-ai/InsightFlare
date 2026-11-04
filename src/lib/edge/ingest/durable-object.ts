@@ -99,6 +99,7 @@ export class IngestDurableObject extends DurableObject {
     readonly activeNow: number;
   } | null = null;
   private visitCleanupDueAt: number | null | undefined;
+  private limitedAnalytics = false;
 
   constructor(state: DurableObjectState, env: Env) {
     super(state, env);
@@ -112,7 +113,20 @@ export class IngestDurableObject extends DurableObject {
     this.configureWebSocketAutoResponse();
     this.schemaReady = this.doState.blockConcurrencyWhile(async () => {
       this.sql.initializeSchema();
+      this.sql.sqlRun(
+        "CREATE TABLE IF NOT EXISTS limited_analytics_state (enabled INTEGER NOT NULL)",
+      );
+      this.limitedAnalytics =
+        this.sql.sqlOne<{ enabled: number }>(
+          "SELECT enabled FROM limited_analytics_state LIMIT 1",
+        )?.enabled === 1;
     });
+  }
+
+  private analyticsEnv(): Env {
+    return this.limitedAnalytics
+      ? { ...this.doEnv, INSIGHTFLARE_ANALYTICS_ENGINE_DISABLED: "1" }
+      : this.doEnv;
   }
 
   private sqlRun(query: string, ...bindings: SqlBinding[]): number {
@@ -168,6 +182,16 @@ export class IngestDurableObject extends DurableObject {
   ): Promise<Response> {
     if (url.pathname === "/ws") {
       return this.handleWebSocket(request, url, logger);
+    }
+
+    if (url.pathname === "/enable-limited" && request.method === "POST") {
+      const { siteId } = (await request.json()) as { siteId: string };
+      return (await this.enableLimitedAnalytics(siteId))
+        ? new Response(null, { status: 204 })
+        : new Response(
+            "Limited analytics requires a site with no existing data",
+            { status: 409 },
+          );
     }
 
     if (url.pathname === "/ingest" && request.method === "POST") {
@@ -247,6 +271,40 @@ export class IngestDurableObject extends DurableObject {
     }
   }
 
+  private async enableLimitedAnalytics(siteId: string): Promise<boolean> {
+    return this.doState.blockConcurrencyWhile(async () => {
+      if (this.limitedAnalytics) return true;
+      const buffered = this.sql.sqlOne<{ found: number }>(
+        "SELECT 1 AS found WHERE EXISTS (SELECT 1 FROM buffered_visits) OR EXISTS (SELECT 1 FROM buffered_custom_events)",
+      );
+      if (buffered) return false;
+      await this.doEnv.DB.prepare(
+        "INSERT OR IGNORE INTO site_identities (site_id) SELECT id FROM sites WHERE id = ?",
+      )
+        .bind(siteId)
+        .run();
+      const start = Math.floor(Date.now() / 86400000) * 86400000;
+      await this.doEnv.DB.prepare(
+        `INSERT OR IGNORE INTO limited_analytics_retention (site_pk, managed_from_ms, sealed_before_ms, next_day_ms) SELECT si.site_pk, ?, ?, ? FROM site_identities si JOIN sites s ON s.id = si.site_id WHERE si.site_id = ? AND NOT EXISTS (SELECT 1 FROM visits v WHERE v.site_pk = si.site_pk) AND NOT EXISTS (SELECT 1 FROM custom_events e WHERE e.site_pk = si.site_pk) AND NOT EXISTS (SELECT 1 FROM visit_hourly_rollups h WHERE h.site_pk = si.site_pk) AND NOT EXISTS (SELECT 1 FROM archive_objects a WHERE a.site_pk = si.site_pk)`,
+      )
+        .bind(start, start, start, siteId)
+        .run();
+      const state = await this.doEnv.DB.prepare(
+        "SELECT 1 AS ok FROM limited_analytics_retention r JOIN site_identities si ON si.site_pk = r.site_pk WHERE si.site_id = ? AND r.phase != 'deleted'",
+      )
+        .bind(siteId)
+        .first();
+      if (!state) {
+        return false;
+      }
+      this.sql.sqlRun(
+        "INSERT INTO limited_analytics_state (enabled) VALUES (1)",
+      );
+      this.limitedAnalytics = true;
+      return true;
+    });
+  }
+
   private async handleIngest(
     request: Request,
     logger: InvocationLogger,
@@ -259,6 +317,16 @@ export class IngestDurableObject extends DurableObject {
     } catch {
       logger.warn("do.ingest.bad_request");
       return new Response("Bad Request", { status: 400 });
+    }
+
+    if (this.limitedAnalytics && !envelope.limited) {
+      return new Response(null, { status: 204 });
+    }
+    if (envelope.limited && !this.limitedAnalytics) {
+      if (!(await this.enableLimitedAnalytics(envelope.client.siteId || ""))) {
+        logger.error("do.limited_retention_initialization_blocked");
+        return new Response("limited retention unavailable", { status: 503 });
+      }
     }
 
     const traceId = envelope.trace?.id || "";
@@ -649,7 +717,7 @@ export class IngestDurableObject extends DurableObject {
       );
       if (closedPrevious > 0) {
         writeTrafficVisitFinalizedFact(
-          this.doEnv,
+          this.analyticsEnv(),
           {
             visit:
               previousVisit ??
@@ -692,7 +760,7 @@ export class IngestDurableObject extends DurableObject {
       logger.warn("do.ingest.session_state_failed");
     }
     writeTrafficPageviewFact(
-      this.doEnv,
+      this.analyticsEnv(),
       { record, sessionPageIndex, sessionViewCount: sessionPageIndex },
       logger,
     );
@@ -827,7 +895,7 @@ export class IngestDurableObject extends DurableObject {
 
     for (const pending of pendingEvents) {
       writeEventAnalyticsPoint(
-        this.doEnv,
+        this.analyticsEnv(),
         {
           ...record,
           kind: "custom_event",
@@ -1076,7 +1144,7 @@ export class IngestDurableObject extends DurableObject {
     }
 
     writeTrafficVisitFinalizedFact(
-      this.doEnv,
+      this.analyticsEnv(),
       {
         visit: {
           siteId: visit.siteId,
@@ -1421,7 +1489,7 @@ export class IngestDurableObject extends DurableObject {
       return;
     }
     logger.info("do.ingest.custom_event_buffered");
-    writeEventAnalyticsPoint(this.doEnv, record, logger);
+    writeEventAnalyticsPoint(this.analyticsEnv(), record, logger);
     await this.updateOpenVisitActivity(record.visitId, record.eventAt);
     await this.pushRealtimeRecord({
       id: record.eventId,
@@ -1868,10 +1936,10 @@ export class IngestDurableObject extends DurableObject {
       pushRealtimeRecord: this.pushRealtimeRecord.bind(this),
       writeTrafficVisitFinalizedFact: (
         input: Parameters<typeof writeTrafficVisitFinalizedFact>[1],
-      ) => writeTrafficVisitFinalizedFact(this.doEnv, input, logger),
+      ) => writeTrafficVisitFinalizedFact(this.analyticsEnv(), input, logger),
       writeTrafficSessionEndedFact: (
         input: Parameters<typeof writeTrafficSessionEndedFact>[1],
-      ) => writeTrafficSessionEndedFact(this.doEnv, input, logger),
+      ) => writeTrafficSessionEndedFact(this.analyticsEnv(), input, logger),
       observability: logger,
     };
   }

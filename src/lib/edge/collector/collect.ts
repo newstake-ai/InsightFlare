@@ -9,10 +9,12 @@ import { writeRequestAnalyticsPoint } from "@/lib/edge/analytics-engine/request-
 import { requestIp, verifyCollectToken } from "@/lib/edge/auth/collect-token";
 import { classifyCollectBotTraffic } from "@/lib/edge/collector/bot-protection";
 import { normalizeTrackerUaClientHints } from "@/lib/edge/collector/client-hints";
+import { createLimitedEnvelope } from "@/lib/edge/collector/limited-envelope";
 import { expandCustomEventData } from "@/lib/edge/ingest/custom-event-json";
 import type { InvocationLogger } from "@/lib/edge/observability/logger";
 import {
   normalizeSiteSettingsKey,
+  readAuthoritativeLimitedMode,
   readSiteTrackingConfig,
 } from "@/lib/edge/sites/settings-store";
 import type { Env } from "@/lib/edge/types";
@@ -26,6 +28,7 @@ import type { TrackerPayloadKind } from "@/lib/edge/types";
 import { jsonCloneRecord } from "@/lib/edge/utils";
 import { assertContentSize, BODY_SIZE_LIMITS } from "@/lib/form-helpers";
 import { jsonResponse } from "@/lib/response";
+import { visitorDailySaltSecret } from "@/lib/secrets";
 import { normalizeSiteScriptSettings } from "@/lib/site-settings";
 const CORS_BASE_HEADERS = {
   "access-control-allow-methods": "GET, POST, PATCH, OPTIONS",
@@ -236,6 +239,7 @@ type CollectionDecision =
       payload: null;
       normalizedPayload?: TrackerClientPayload;
       blockedFields?: readonly BlockingFieldId[];
+      limitedAnalytics?: boolean;
       reason: string;
       detail?: Record<string, unknown>;
     }
@@ -294,6 +298,8 @@ async function decideCollectionPolicy(
   try {
     // `readSiteTrackingConfig` already caches KV results for 1 hour.
     settings = await readSiteTrackingConfig(env, siteId);
+    if (settings && (await readAuthoritativeLimitedMode(env, siteId)))
+      settings = { ...settings, limitedAnalytics: true };
   } catch {
     logger?.warn("collect.settings_read_failed");
     settings = null;
@@ -306,6 +312,20 @@ async function decideCollectionPolicy(
       siteId,
       payload: null,
       reason: "missing_site_settings",
+    };
+  }
+
+  if (
+    settings.limitedAnalytics &&
+    (kind === "identify" ||
+      ["1", "yes"].includes((request.headers.get("dnt") || "").toLowerCase()))
+  ) {
+    return {
+      shouldForward: false,
+      allowOrigin: origin,
+      siteId,
+      payload: null,
+      reason: "limited_policy",
     };
   }
 
@@ -341,6 +361,7 @@ async function decideCollectionPolicy(
       siteId,
       payload: null,
       normalizedPayload: normalizedPayloadResult.payload,
+      limitedAnalytics: settings.limitedAnalytics === true,
       blockedFields: ["domains"],
       reason: "origin_not_allowed",
       detail: { origin, originHostname },
@@ -364,6 +385,7 @@ async function decideCollectionPolicy(
       siteId,
       payload: null,
       normalizedPayload: normalizedPayloadResult.payload,
+      limitedAnalytics: settings.limitedAnalytics === true,
       blockedFields: firstBlock
         ? BLOCKING_FIELD_IDS.filter((field) =>
             blocking.blockedBy.some((match) => match.field === field),
@@ -547,6 +569,7 @@ export async function handleCollectRequest(
     : await decide();
   if (!decision.shouldForward) {
     if (
+      !decision.limitedAnalytics &&
       decision.normalizedPayload &&
       decision.blockedFields &&
       decision.blockedFields.length > 0
@@ -583,21 +606,22 @@ export async function handleCollectRequest(
     decision.scriptSettings.botProtectionEnabled !== false
   ) {
     logger?.info("collect.bot_diverted");
-    writeRequestAnalyticsPoint(
-      env,
-      {
-        request: requestWithCf,
-        payload: decision.payload,
-        siteId: decision.siteId,
-        origin: decision.allowOrigin,
-        traceId: trace.id,
-        receivedAt: trace.acceptedAt,
-        category: "bot",
-        disposition: "blocked",
-        reasons: classification.reasons,
-      },
-      logger,
-    );
+    if (!decision.scriptSettings.limitedAnalytics)
+      writeRequestAnalyticsPoint(
+        env,
+        {
+          request: requestWithCf,
+          payload: decision.payload,
+          siteId: decision.siteId,
+          origin: decision.allowOrigin,
+          traceId: trace.id,
+          receivedAt: trace.acceptedAt,
+          category: "bot",
+          disposition: "blocked",
+          reasons: classification.reasons,
+        },
+        logger,
+      );
     return noContent(decision.allowOrigin);
   }
 
@@ -608,6 +632,58 @@ export async function handleCollectRequest(
       classification.reasons.includes("network_service_asn"))
   ) {
     logger?.info("collect.bot_diverted");
+    if (!decision.scriptSettings.limitedAnalytics)
+      writeRequestAnalyticsPoint(
+        env,
+        {
+          request: requestWithCf,
+          payload: decision.payload,
+          siteId: decision.siteId,
+          origin: decision.allowOrigin,
+          traceId: trace.id,
+          receivedAt: trace.acceptedAt,
+          category: "suspected_bot",
+          disposition: "blocked",
+          reasons: classification.reasons,
+        },
+        logger,
+      );
+    return noContent(decision.allowOrigin);
+  }
+
+  const doId = env.INGEST_DO.idFromName(decision.siteId);
+  const stub = env.INGEST_DO.get(doId);
+
+  let envelope: IngestEnvelopePayload = {
+    request: serializeRequestPayload(
+      requestWithCf,
+      JSON.stringify(decision.payload),
+    ),
+    client: decision.payload,
+    trace,
+  };
+
+  if (decision.scriptSettings.limitedAnalytics) {
+    if (
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+        decision.payload.visitId || "",
+      )
+    )
+      return noContent(decision.allowOrigin);
+    const secret = await visitorDailySaltSecret(env);
+    if (!secret) return noContent(decision.allowOrigin);
+    const hostname = parseOriginHostname(decision.allowOrigin);
+    envelope = await createLimitedEnvelope(
+      requestWithCf,
+      { ...decision.payload, hostname },
+      trace,
+      secret,
+    );
+  }
+
+  logger?.info("collect.forward_queued");
+
+  if (!decision.scriptSettings.limitedAnalytics)
     writeRequestAnalyticsPoint(
       env,
       {
@@ -617,44 +693,12 @@ export async function handleCollectRequest(
         origin: decision.allowOrigin,
         traceId: trace.id,
         receivedAt: trace.acceptedAt,
-        category: "suspected_bot",
-        disposition: "blocked",
+        category: classification.category,
+        disposition: "included",
         reasons: classification.reasons,
       },
       logger,
     );
-    return noContent(decision.allowOrigin);
-  }
-
-  const doId = env.INGEST_DO.idFromName(decision.siteId);
-  const stub = env.INGEST_DO.get(doId);
-
-  const envelope: IngestEnvelopePayload = {
-    request: serializeRequestPayload(
-      requestWithCf,
-      JSON.stringify(decision.payload),
-    ),
-    client: decision.payload,
-    trace,
-  };
-
-  logger?.info("collect.forward_queued");
-
-  writeRequestAnalyticsPoint(
-    env,
-    {
-      request: requestWithCf,
-      payload: decision.payload,
-      siteId: decision.siteId,
-      origin: decision.allowOrigin,
-      traceId: trace.id,
-      receivedAt: trace.acceptedAt,
-      category: classification.category,
-      disposition: "included",
-      reasons: classification.reasons,
-    },
-    logger,
-  );
 
   const forward = stub
     .fetch("https://ingest.internal/ingest", {

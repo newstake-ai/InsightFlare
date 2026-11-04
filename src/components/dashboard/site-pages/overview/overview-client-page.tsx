@@ -17,6 +17,7 @@ import { resolveFilterScope } from "@/lib/edge/analytics/contract/scoped-filter"
 import { attachFilterScopePreference } from "@/lib/filter-contract";
 import { usePathname } from "@/lib/router";
 
+import { LimitedHistory } from "./limited-history";
 import { OverviewMetricsSection, OverviewTrendSection } from "./metrics";
 import {
   extractGeoCountryCodeFromFilterValue,
@@ -31,6 +32,7 @@ export function OverviewClientPage({
   siteDomain,
   pathname,
   showSourceLinkTab,
+  showLimitedHistory,
 }: OverviewClientPageProps) {
   const searchParams = useLiveSearchParams();
   const livePathname = usePathname() || pathname;
@@ -94,6 +96,7 @@ export function OverviewClientPage({
         title={messages.overview.title}
         subtitle={messages.overview.subtitle}
       />
+      {showLimitedHistory && <LimitedHistory siteId={siteId} />}
       <OverviewMetricsSection
         locale={locale}
         messages={messages}

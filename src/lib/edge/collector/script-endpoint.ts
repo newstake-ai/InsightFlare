@@ -5,6 +5,7 @@ import {
 } from "@/lib/edge/auth/collect-token";
 import {
   normalizeSiteSettingsKey,
+  readAuthoritativeLimitedMode,
   readSiteTrackingConfig,
 } from "@/lib/edge/sites/settings-store";
 import type { Env } from "@/lib/edge/types";
@@ -64,6 +65,7 @@ function applyConfigToSdk(
   config: {
     siteId: string;
     isEUMode: boolean;
+    limitedAnalytics?: boolean;
     trackQueryParams: boolean;
     trackHash: boolean;
     ignoreDoNotTrack: boolean;
@@ -158,6 +160,8 @@ export async function handleTrackerScriptRequest(
   let settings;
   try {
     settings = await readSiteTrackingConfig(env, siteId);
+    if (settings && (await readAuthoritativeLimitedMode(env, siteId)))
+      settings = { ...settings, limitedAnalytics: true };
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "site_settings_unavailable";
@@ -168,14 +172,15 @@ export async function handleTrackerScriptRequest(
   }
 
   const requestEuMode = isEUCountry(request);
-  const euMode = determineEuMode(settings.trackingStrength, requestEuMode);
+  const euMode =
+    settings.limitedAnalytics ||
+    determineEuMode(settings.trackingStrength, requestEuMode);
   const sessionWindowMinutes = resolveSessionWindowMinutes(env);
   const ttlSeconds = resolveScriptCacheTtlSeconds(env);
   const clientIp = requestIp(request);
-  const performanceSampleRate = Math.max(
-    0,
-    Math.min(100, Number(settings.performanceSampleRate || 0)),
-  );
+  const performanceSampleRate = settings.limitedAnalytics
+    ? 0
+    : Math.max(0, Math.min(100, Number(settings.performanceSampleRate || 0)));
   const fingerprint = [
     SCRIPT_CACHE_VERSION,
     settingsFingerprint({
@@ -187,7 +192,9 @@ export async function handleTrackerScriptRequest(
     }),
   ].join("|");
   const cacheKey = scriptCacheKeyRequest(siteId, euMode, fingerprint);
-  const scriptCache = await openEdgeCache(SCRIPT_RESPONSE_CACHE_NAME);
+  const scriptCache = settings.limitedAnalytics
+    ? null
+    : await openEdgeCache(SCRIPT_RESPONSE_CACHE_NAME);
   if (scriptCache) {
     const cached = await scriptCache.match(cacheKey);
     if (cached) {
@@ -203,6 +210,7 @@ export async function handleTrackerScriptRequest(
       env,
       siteId,
       ip: clientIp,
+      hideIp: settings.limitedAnalytics === true,
     });
   } catch (error) {
     const message =
@@ -214,10 +222,15 @@ export async function handleTrackerScriptRequest(
   const script = applyConfigToSdk(sdkTemplate, {
     siteId,
     isEUMode: euMode,
+    ...(settings.limitedAnalytics ? { limitedAnalytics: true } : {}),
     trackQueryParams: settings.trackQueryParams,
-    trackHash: settings.trackHash,
-    ignoreDoNotTrack: settings.ignoreDoNotTrack,
-    autoTrackOutboundLinks: settings.autoTrackOutboundLinks,
+    trackHash: settings.limitedAnalytics ? false : settings.trackHash,
+    ignoreDoNotTrack: settings.limitedAnalytics
+      ? false
+      : settings.ignoreDoNotTrack,
+    autoTrackOutboundLinks: settings.limitedAnalytics
+      ? false
+      : settings.autoTrackOutboundLinks,
     performanceSampleRate,
     sessionWindowMs,
     collectToken,

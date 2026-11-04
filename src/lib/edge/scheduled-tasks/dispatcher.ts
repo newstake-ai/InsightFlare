@@ -22,11 +22,13 @@ import { runNotificationTick } from "@/lib/notifications/edge/notification-task"
 
 import { runDatabaseMaintenance } from "./database-maintenance";
 import { runHourlyAggregation } from "./hourly-rollup";
+import { runLimitedRetention } from "./limited-retention";
 import { SCHEDULED_TASKS } from "./registry";
 import { runScheduledTask, STALE_RUNNING_MS } from "./runner";
 
 const TASK_ORDER = [
   "notification_tick",
+  "limited_analytics_retention",
   "visit_hourly_rollup",
   "database_maintenance",
 ] as const;
@@ -187,6 +189,14 @@ async function executeTask(
         taskDefinition,
         scheduledTime,
         runNotificationTick,
+        observability,
+      );
+    } else if (taskKey === "limited_analytics_retention") {
+      await runScheduledTask(
+        env,
+        taskDefinition,
+        scheduledTime,
+        () => runLimitedRetention(env, scheduledTime),
         observability,
       );
     } else if (taskKey === "visit_hourly_rollup") {
