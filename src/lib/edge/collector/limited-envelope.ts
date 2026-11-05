@@ -6,6 +6,8 @@ import type {
 } from "@/lib/edge/types";
 import { sanitizeLimitedPayload } from "@/lib/tracker-contract/limited-analytics";
 
+import { verifiedPublicPage } from "./public-page";
+
 async function keyedHash(secret: string, parts: string[]): Promise<string> {
   const encoder = new TextEncoder();
   const key = await crypto.subtle.importKey(
@@ -30,6 +32,7 @@ export async function createLimitedEnvelope(
   input: TrackerClientPayload,
   trace: IngestTracePayload,
   secret: string,
+  pageSecret?: string,
 ) {
   const day = new Date(trace.acceptedAt).toISOString().slice(0, 10);
   const siteId = input.siteId || "";
@@ -47,6 +50,36 @@ export async function createLimitedEnvelope(
     deviceType,
   ]);
   const client = sanitizeLimitedPayload(input);
+  const publicPage =
+    input.kind === "pageview"
+      ? await verifiedPublicPage(input, pageSecret)
+      : null;
+  if (publicPage) Object.assign(client, publicPage);
+  else if (
+    input.kind === "pageview" &&
+    input.siteId === "628631a7-ff2f-4f9c-aa11-df2fca9b2acb" &&
+    input.hostname === "newstake.ai"
+  ) {
+    const labels: Record<string, string> = {
+      "/": "Publications",
+      "/publications": "Publications",
+      "/about": "About",
+      "/privacy": "Privacy",
+      "/feedback": "Feedback",
+      "/people": "People",
+      "/companies": "Companies",
+      "/institutions": "Institutions",
+      "/products": "Products",
+      "/events": "Events",
+      "/entities": "Entities",
+      "/sites": "Sites",
+      "/sites/guides": "Guides",
+      "/sites/developers": "Developers",
+      "/sites/topics": "Topics",
+    };
+    const title = labels[client.pathname || ""];
+    if (title) client.title = title;
+  }
   client.timestamp = trace.acceptedAt;
   if (client.kind === "pageview") client.startedAt = trace.acceptedAt;
   else delete client.startedAt;

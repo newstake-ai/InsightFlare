@@ -665,6 +665,74 @@ describe("Tracker Browser SDK Integration Suite", () => {
     ).toBe(visitorId);
   });
 
+  it("waits for matching Newstake metadata and ignores stale route and search labels", async () => {
+    (window as any).happyDOM.setURL("https://newstake.ai/publications?q=test");
+    const makeMeta = (path: string, search: boolean) => {
+      const meta = document.createElement("meta");
+      meta.name = "insightflare-public-page";
+      meta.content = `${btoa(JSON.stringify({ site: "628631a7-ff2f-4f9c-aa11-df2fca9b2acb", host: "newstake.ai", exp: Date.now() + 60000, path, search }))}.signature`;
+      document.head.append(meta);
+      return meta;
+    };
+    const stale = makeMeta("/publications", false);
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response("ok"));
+    await importConfiguredSdk({
+      siteId: "628631a7-ff2f-4f9c-aa11-df2fca9b2acb",
+      limitedAnalytics: true,
+      buildPerformance: false,
+    });
+    expect(fetchSpy).not.toHaveBeenCalled();
+    const matching = makeMeta("/publications", true);
+    await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
+    expect(decodeFetchBody(fetchSpy).publicPageToken).toBe(matching.content);
+    stale.remove();
+    matching.remove();
+  });
+
+  it("flushes a pending Newstake pageview before a click", async () => {
+    (window as any).happyDOM.setURL(
+      "https://newstake.ai/publications/0123456789abcdef01234567",
+    );
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response("ok"));
+    await importConfiguredSdk({
+      siteId: "628631a7-ff2f-4f9c-aa11-df2fca9b2acb",
+      limitedAnalytics: true,
+      buildPerformance: false,
+    });
+    expect(fetchSpy).not.toHaveBeenCalled();
+    (window as any).__insightflare_tracker_v6__.track("click", {
+      action: "open",
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(decodeFetchBody(fetchSpy, 0).kind).toBe("pageview");
+    expect(decodeFetchBody(fetchSpy, 1).kind).toBe("custom_event");
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("flushes a pending Newstake pageview once on unload", async () => {
+    (window as any).happyDOM.setURL(
+      "https://newstake.ai/publications/0123456789abcdef01234567",
+    );
+    const beacon = vi.fn((_url: string, _body: Blob) => true);
+    (navigator as any).sendBeacon = beacon;
+    await importConfiguredSdk({
+      siteId: "628631a7-ff2f-4f9c-aa11-df2fca9b2acb",
+      limitedAnalytics: true,
+      buildPerformance: false,
+    });
+    window.dispatchEvent(new Event("pagehide"));
+    expect(beacon).toHaveBeenCalledTimes(2);
+    const first = await decodeBeaconBody(beacon.mock.calls[0][1]);
+    const second = await decodeBeaconBody(beacon.mock.calls[1][1]);
+    expect(first.kind).toBe("pageview");
+    expect(second.kind).toBe("leave");
+  });
+
   it("suppresses the expired limited visit until real navigation and clears the legacy key", async () => {
     const now = vi
       .spyOn(Date, "now")

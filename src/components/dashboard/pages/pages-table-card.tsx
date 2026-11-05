@@ -287,19 +287,17 @@ function metricValue(
   if (metric === "avgDurationMs") return durationFormat(locale, value);
   return numberFormat(locale, value);
 }
-function PageLabel({
-  messages,
-  row,
-}: {
-  messages: AppMessages;
-  row: PagesDashboardRow;
-}) {
-  const title = row.titles[0]?.trim() || messages.pages.untitled;
+function PageLabel({ row }: { row: PagesDashboardRow }) {
   const path = decodeUrlDisplayValue(row.pathname || "/");
+  const title = row.titles[0]?.trim() || path;
   return (
     <div className="min-w-0 text-left">
       <p className="truncate font-medium text-foreground">{title}</p>
-      <p className="truncate font-mono text-xs text-muted-foreground">{path}</p>
+      {title !== path && (
+        <p className="truncate font-mono text-xs text-muted-foreground">
+          {path}
+        </p>
+      )}
     </div>
   );
 }
@@ -498,8 +496,8 @@ export function PagesTableCard({
       const open = () => onOpenPage(row.pathname);
       const renderColumn = (columnId: PagesTableColumnId) => {
         if (columnId === "page") {
-          const title = row.titles[0]?.trim() || messages.pages.untitled;
           const path = decodeUrlDisplayValue(row.pathname || "/");
+          const title = row.titles[0]?.trim() || path;
           return (
             <TableCell key="page" className="pl-2">
               <AnalyticsDetailsTooltipTarget
@@ -521,7 +519,7 @@ export function PagesTableCard({
                   ],
                 }}
               >
-                <PageLabel messages={messages} row={row} />
+                <PageLabel row={row} />
               </AnalyticsDetailsTooltipTarget>
             </TableCell>
           );

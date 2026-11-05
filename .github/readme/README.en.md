@@ -445,3 +445,13 @@ If you do not use the deploy button, deploy with the steps below:
 ## License
 
 [MIT](/LICENSE) Copyright 2026 RavelloH
+
+### Newstake limited page metadata
+
+The Newstake limited-mode integration can accept signed public page labels using a
+separate `NEWSTAKE_PAGE_SECRET` Worker secret shared with the website. The collector
+accepts metadata only for Newstake's configured site and hostname, verifies the
+signature and expiry, and strips the token before ingestion. Missing or invalid
+metadata falls back to grouped paths and fixed labels. Other sites retain the
+standard limited-mode sanitizer. The key must be kept out of browser code and source
+control; coordinate key rotation and releases with the website operator.
