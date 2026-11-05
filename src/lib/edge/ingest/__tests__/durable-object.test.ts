@@ -724,6 +724,45 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 describe("IngestDurableObject", () => {
+  it("refuses limited mode for buffered data and enables it idempotently after the buffer is empty", async () => {
+    const ctx = createTestDo();
+    await ctx.object.fetch(new Request("https://ingest.internal/nope"));
+    ctx.d1.db.exec(`
+      CREATE TABLE sites (id TEXT PRIMARY KEY);
+      INSERT INTO sites VALUES ('site-1');
+      CREATE TABLE limited_analytics_retention (
+        site_pk INTEGER PRIMARY KEY, managed_from_ms INTEGER NOT NULL,
+        sealed_before_ms INTEGER NOT NULL, next_day_ms INTEGER NOT NULL,
+        phase TEXT NOT NULL DEFAULT 'idle'
+      );
+      CREATE TABLE visit_hourly_rollups (site_pk INTEGER);
+      CREATE TABLE archive_objects (site_pk INTEGER);
+    `);
+    const enable = () =>
+      ctx.object.fetch(
+        new Request("https://ingest.internal/enable-limited", {
+          method: "POST",
+          body: JSON.stringify({ siteId: "site-1" }),
+        }),
+      );
+    insertBufferedVisit(ctx.sql);
+    expect((await enable()).status).toBe(409);
+    expect(
+      ctx.d1.db
+        .prepare("SELECT COUNT(*) AS count FROM limited_analytics_retention")
+        .get()?.count,
+    ).toBe(0);
+    ctx.sql.exec("DELETE FROM buffered_visits");
+    expect((await enable()).status).toBe(204);
+    const before = ctx.d1.db
+      .prepare("SELECT * FROM limited_analytics_retention")
+      .get();
+    expect(before).toMatchObject({ site_pk: 1, phase: "idle" });
+    expect((await enable()).status).toBe(204);
+    expect(
+      ctx.d1.db.prepare("SELECT * FROM limited_analytics_retention").get(),
+    ).toEqual(before);
+  });
   it("exports a durable object class and rejects unknown or invalid request routes", async () => {
     const ctx = createTestDo({ ADMIN_WS_TOKEN: "secret-token" });
 
