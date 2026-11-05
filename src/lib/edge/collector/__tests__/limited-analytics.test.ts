@@ -3,6 +3,28 @@ import { describe, expect, it } from "vitest";
 import { sanitizeLimitedPayload } from "@/lib/tracker-contract/limited-analytics";
 
 describe("limited analytics", () => {
+  it("redacts identifier-like paths and unapproved campaign and event data", () => {
+    expect(
+      sanitizeLimitedPayload({
+        pathname: "/users/123456789/%ZZ",
+        query:
+          "utm_source=user%40example.com&utm_medium=email&utm_campaign=abcdef1234567890abcdef1234567890&private=secret",
+        referrerUrl: "javascript:alert(1)",
+        eventName: "unapproved",
+        eventData: {
+          action: "unapproved",
+          target_domain: "invalid/domain",
+          target_path: "/users/123456789?token=secret",
+        },
+      }),
+    ).toEqual({
+      pathname: "/users/:redacted/:redacted",
+      query: "utm_medium=email",
+      referrerUrl: "",
+      eventName: "",
+      eventData: { target_path: "/users/:redacted" },
+    });
+  });
   it("retains approved campaign and event fields without client identity or URL parameters", () => {
     expect(
       sanitizeLimitedPayload({
