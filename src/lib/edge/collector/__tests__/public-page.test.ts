@@ -114,6 +114,35 @@ describe("verified public page", () => {
     expect(JSON.stringify(leave)).not.toContain(publicPageToken);
   });
 
+  it("rejects malformed and incorrectly scoped metadata", async () => {
+    const claim = {
+      site: siteId,
+      host: "newstake.ai",
+      path,
+      title: "Public article",
+      exp: Date.now() + 60000,
+    };
+    const input = {
+      siteId,
+      hostname: "newstake.ai",
+      pathname: "/publications/:redacted",
+    };
+    for (const publicPageToken of [
+      "invalid",
+      "a.b.c",
+      "x".repeat(2049),
+      await token({ ...claim, site: "another-site" }),
+      await token({ ...claim, host: "other.example" }),
+      await token({ ...claim, title: "" }),
+      await token({ ...claim, exp: Date.now() + 90000000 }),
+    ]) {
+      expect(
+        await verifiedPublicPage({ ...input, publicPageToken }, secret),
+      ).toBeNull();
+    }
+    expect(await verifiedPublicPage(input, undefined)).toBeNull();
+  });
+
   it.each([
     ["/people/public-person", "/people/:redacted"],
     ["/sites/public-guide", "/sites/:redacted"],
