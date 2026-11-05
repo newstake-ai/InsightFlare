@@ -101,6 +101,7 @@ describe("site settings helpers", () => {
         },
       }),
     ).toEqual({
+      limitedAnalytics: false,
       trackingStrength: "strong",
       trackQueryParams: false,
       trackHash: true,
