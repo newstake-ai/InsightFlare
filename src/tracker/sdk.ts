@@ -184,6 +184,89 @@ function rotateVisitorId(): void {
   window.localStorage.setItem(VISITOR_KEY, visitorId);
 }
 
+function publicPageToken(href: string): string {
+  if (
+    SITE_ID !== "628631a7-ff2f-4f9c-aa11-df2fca9b2acb" ||
+    location.hostname !== "newstake.ai"
+  )
+    return "";
+  const url = new URL(href, location.href);
+  for (const meta of document.querySelectorAll(
+    'meta[name="insightflare-public-page"]',
+  )) {
+    const token = meta.getAttribute("content") || "";
+    if (!token || token.length > 2048) continue;
+    try {
+      const part = token.split(".")[0].replace(/-/g, "+").replace(/_/g, "/");
+      const claim = JSON.parse(
+        new TextDecoder().decode(
+          Uint8Array.from(atob(part), (c) => c.charCodeAt(0)),
+        ),
+      );
+      const search = Boolean((url.searchParams.get("q") || "").trim());
+      if (
+        claim.site === SITE_ID &&
+        claim.host === "newstake.ai" &&
+        Number.isSafeInteger(claim.exp) &&
+        claim.exp >= Date.now() &&
+        claim.path === url.pathname &&
+        (claim.search === undefined || claim.search === search)
+      )
+        return token;
+    } catch {
+      /* Ignore invalid metadata. */
+    }
+  }
+  return "";
+}
+
+let flushPendingPageview: ((useBeacon?: boolean) => void) | null = null;
+function sendPageview(payload: any, href: string): void {
+  const url = new URL(href, location.href);
+  const expected =
+    LIMITED_ANALYTICS &&
+    SITE_ID === "628631a7-ff2f-4f9c-aa11-df2fca9b2acb" &&
+    url.hostname === "newstake.ai" &&
+    (url.pathname === "/" ||
+      url.pathname === "/publications" ||
+      /^\/sites\/topics\/[^/]+$/.test(url.pathname) ||
+      (!new Set(["/sites/topics", "/sites/guides", "/sites/developers"]).has(
+        url.pathname,
+      ) &&
+        /^\/(publications|people|companies|institutions|products|events|sites)\/[^/]+$/.test(
+          url.pathname,
+        )));
+  const initial = expected ? publicPageToken(href) : "";
+  if (!expected || initial || typeof MutationObserver === "undefined") {
+    if (initial) payload.publicPageToken = initial;
+    sendWhenUaClientHintsReady(payload, false);
+    return;
+  }
+  let timer = 0;
+  let sent = false;
+  const observer = new MutationObserver(() => {
+    if (publicPageToken(href)) flush();
+  });
+  const flush = (useBeacon = false) => {
+    if (sent) return;
+    sent = true;
+    observer.disconnect();
+    clearTimeout(timer);
+    flushPendingPageview = null;
+    const token = publicPageToken(href);
+    if (token) payload.publicPageToken = token;
+    send(payload, useBeacon);
+  };
+  flushPendingPageview = flush;
+  observer.observe(document.documentElement, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ["content"],
+  });
+  timer = window.setTimeout(flush, 1000);
+}
+
 function pagePayloadBase(
   href: string,
   referrerUrl: string,
@@ -218,7 +301,13 @@ function send(payload: any, useBeacon: boolean): void {
   try {
     body = JSON.stringify(
       LIMITED_ANALYTICS
-        ? { ...sanitizeLimitedPayload(payload), collectToken: COLLECT_TOKEN }
+        ? {
+            ...sanitizeLimitedPayload(payload),
+            ...(payload.publicPageToken
+              ? { publicPageToken: payload.publicPageToken }
+              : {}),
+            collectToken: COLLECT_TOKEN,
+          }
         : withUaClientHints(
             { ...payload, collectToken: COLLECT_TOKEN },
             uaClientHints,
@@ -269,6 +358,7 @@ function startVisit(
   startedAt: number,
   navigation = "",
 ): void {
+  flushPendingPageview?.();
   leaveSent = false;
   pendingHiddenAt = 0;
   currentVisit = {
@@ -290,7 +380,7 @@ function startVisit(
       new URL(currentVisit.href, window.location.href).pathname || "/",
     );
   }
-  sendWhenUaClientHintsReady(
+  sendPageview(
     {
       ...pagePayloadBase(
         currentVisit.href,
@@ -301,7 +391,7 @@ function startVisit(
       kind: "pageview",
       ...(navigation ? { navigation } : {}),
     },
-    false,
+    href,
   );
 }
 
@@ -319,6 +409,7 @@ function expiredLimitedVisit(eventAt: number): boolean {
 }
 
 function endCurrentVisit(exitReason: string, useBeacon: boolean): void {
+  flushPendingPageview?.(useBeacon);
   if (!currentVisit || leaveSent) return;
   if (expiredLimitedVisit(Date.now())) return;
   leaveSent = true;
@@ -357,6 +448,7 @@ function sendVisibility(
   visibilityState: "hidden" | "visible",
   eventAt: number,
 ): void {
+  flushPendingPageview?.(true);
   if (!currentVisit || leaveSent) return;
   if (expiredLimitedVisit(eventAt)) return;
   const url = new URL(currentVisit.href, window.location.href);
@@ -555,6 +647,7 @@ function track(eventName: string, eventData?: unknown): void {
     );
   }
   flushPendingRouteChange();
+  flushPendingPageview?.();
   if (expiredLimitedVisit(Date.now())) return;
   send(
     {

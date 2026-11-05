@@ -678,6 +678,7 @@ export async function handleCollectRequest(
       { ...decision.payload, hostname },
       trace,
       secret,
+      env.NEWSTAKE_PAGE_SECRET,
     );
   }
 

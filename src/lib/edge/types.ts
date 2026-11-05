@@ -19,6 +19,7 @@ export interface Env {
   ARCHIVE_BUCKET?: R2Bucket;
   MAIN_SECRET?: string;
   DAILY_SALT_SECRET?: string;
+  NEWSTAKE_PAGE_SECRET?: string;
   DEMO_MODE?: string;
   DISABLE_CRON_TASKS?: string;
   ADMIN_WS_TOKEN?: string;

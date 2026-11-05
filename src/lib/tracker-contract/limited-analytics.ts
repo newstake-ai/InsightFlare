@@ -35,6 +35,43 @@ function cleanPath(input: unknown): string {
   return (result.startsWith("/") ? result : `/${result}`).slice(0, 512);
 }
 
+const NEWSTAKE_SITE = "628631a7-ff2f-4f9c-aa11-df2fca9b2acb";
+const NEWSTAKE_STATIC = new Set([
+  "/",
+  "/publications",
+  "/about",
+  "/privacy",
+  "/feedback",
+  "/people",
+  "/companies",
+  "/institutions",
+  "/products",
+  "/events",
+  "/entities",
+  "/sites",
+  "/sites/guides",
+  "/sites/developers",
+  "/sites/topics",
+]);
+function cleanNewstakePath(input: unknown): string {
+  const path = typeof input === "string" ? input.split(/[?#]/, 1)[0] : "/";
+  if (/^\/sites\/topics\/[^/]+$/.test(path)) return "/sites/topics/:redacted";
+  if (
+    NEWSTAKE_STATIC.has(path) ||
+    /^\/(publications|people|companies|institutions|products|events|sites)\/:redacted$/.test(
+      path,
+    ) ||
+    path === "/:redacted"
+  )
+    return path;
+  if (/^\/publications\/[a-f0-9]{24}$/.test(path))
+    return "/publications/:redacted";
+  if (/^\/(people|companies|institutions|products|events)\/[^/]+$/.test(path))
+    return path.split("/").slice(0, 2).join("/") + "/:redacted";
+  if (/^\/sites\/[^/]+$/.test(path)) return "/sites/:redacted";
+  return "/:redacted";
+}
+
 function cleanQuery(input: unknown): string {
   const inputParams = new URLSearchParams(
     typeof input === "string" ? input : "",
@@ -94,7 +131,11 @@ export function sanitizeLimitedPayload(
   ] as const) {
     if (input[key] !== undefined) Object.assign(result, { [key]: input[key] });
   }
-  if (input.pathname !== undefined) result.pathname = cleanPath(input.pathname);
+  if (input.pathname !== undefined)
+    result.pathname =
+      input.siteId === NEWSTAKE_SITE
+        ? cleanNewstakePath(input.pathname)
+        : cleanPath(input.pathname);
   if (input.query !== undefined) result.query = cleanQuery(input.query);
   if (input.referrerUrl !== undefined)
     result.referrerUrl = cleanReferrer(input.referrerUrl);

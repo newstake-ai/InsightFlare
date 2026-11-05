@@ -61,4 +61,5 @@ export interface TrackerClientPayload {
   utmContent?: string;
   uaClientHints?: TrackerUaClientHints;
   collectToken?: string;
+  publicPageToken?: string;
 }
