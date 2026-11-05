@@ -747,6 +747,16 @@ describe("IngestDurableObject", () => {
       );
     insertBufferedVisit(ctx.sql);
     expect((await enable()).status).toBe(409);
+    const limitedEnvelope = {
+      ...envelope(),
+      limited: {
+        visitorId: "daily",
+        browser: "",
+        os: "",
+        deviceType: "desktop",
+      },
+    };
+    expect((await postIngest(ctx.object, limitedEnvelope)).status).toBe(503);
     expect(
       ctx.d1.db
         .prepare("SELECT COUNT(*) AS count FROM limited_analytics_retention")
@@ -754,6 +764,11 @@ describe("IngestDurableObject", () => {
     ).toBe(0);
     ctx.sql.exec("DELETE FROM buffered_visits");
     expect((await enable()).status).toBe(204);
+    expect((await postIngest(ctx.object, envelope())).status).toBe(204);
+    expect(
+      ctx.sql.exec("SELECT COUNT(*) AS count FROM buffered_visits").toArray()[0]
+        .count,
+    ).toBe(0);
     const before = ctx.d1.db
       .prepare("SELECT * FROM limited_analytics_retention")
       .get();
@@ -762,6 +777,43 @@ describe("IngestDurableObject", () => {
     expect(
       ctx.d1.db.prepare("SELECT * FROM limited_analytics_retention").get(),
     ).toEqual(before);
+    const restarted = createTestDo({}, ctx.sql);
+    expect((await postIngest(restarted.object, envelope())).status).toBe(204);
+    expect(
+      ctx.sql.exec("SELECT COUNT(*) AS count FROM buffered_visits").toArray()[0]
+        .count,
+    ).toBe(0);
+  });
+
+  it("rejects limited activation for unknown sites or sites with archived history", async () => {
+    const ctx = createTestDo();
+    await ctx.object.fetch(new Request("https://ingest.internal/nope"));
+    ctx.d1.db.exec(`
+      CREATE TABLE sites (id TEXT PRIMARY KEY);
+      INSERT INTO sites VALUES ('site-1');
+      CREATE TABLE limited_analytics_retention (
+        site_pk INTEGER PRIMARY KEY, managed_from_ms INTEGER NOT NULL,
+        sealed_before_ms INTEGER NOT NULL, next_day_ms INTEGER NOT NULL,
+        phase TEXT NOT NULL DEFAULT 'idle'
+      );
+      CREATE TABLE visit_hourly_rollups (site_pk INTEGER);
+      CREATE TABLE archive_objects (site_pk INTEGER);
+      INSERT INTO archive_objects VALUES (1);
+    `);
+    const enable = (siteId: string) =>
+      ctx.object.fetch(
+        new Request("https://ingest.internal/enable-limited", {
+          method: "POST",
+          body: JSON.stringify({ siteId }),
+        }),
+      );
+    expect((await enable("unknown")).status).toBe(409);
+    expect((await enable("site-1")).status).toBe(409);
+    expect(
+      ctx.d1.db
+        .prepare("SELECT COUNT(*) AS count FROM limited_analytics_retention")
+        .get()?.count,
+    ).toBe(0);
   });
   it("exports a durable object class and rejects unknown or invalid request routes", async () => {
     const ctx = createTestDo({ ADMIN_WS_TOKEN: "secret-token" });

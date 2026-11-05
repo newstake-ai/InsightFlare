@@ -170,6 +170,117 @@ describe("limited analytics retention on workerd", () => {
           )
           .first(),
       ).toEqual({ phase: "idle" });
+      await db
+        .prepare("INSERT INTO site_identities VALUES (3, 'site-3')")
+        .run();
+      await db
+        .prepare(
+          "INSERT INTO limited_analytics_retention (site_pk, managed_from_ms, sealed_before_ms, next_day_ms) VALUES (3, ?, ?, ?)",
+        )
+        .bind(day, day, day)
+        .run();
+      await db
+        .prepare(
+          "CREATE TRIGGER retention_failure BEFORE UPDATE ON limited_analytics_retention WHEN OLD.site_pk = 3 AND NEW.phase = 'sealed' BEGIN SELECT RAISE(FAIL, 'test failure'); END",
+        )
+        .run();
+      expect((await runLimitedRetention({ DB: db } as Env, now)).status).toBe(
+        "partial",
+      );
+      expect(
+        await db
+          .prepare(
+            "SELECT phase, last_error AS error FROM limited_analytics_retention WHERE site_pk = 3",
+          )
+          .first(),
+      ).toMatchObject({
+        phase: "idle",
+        error: expect.stringContaining("test failure"),
+      });
+      await db.prepare("DROP TRIGGER retention_failure").run();
+      expect((await runLimitedRetention({ DB: db } as Env, now)).status).toBe(
+        "success",
+      );
+      expect(
+        await db
+          .prepare(
+            "SELECT phase, last_error AS error FROM limited_analytics_retention WHERE site_pk = 3",
+          )
+          .first(),
+      ).toEqual({ phase: "idle", error: null });
+      await db
+        .prepare("INSERT INTO site_identities VALUES (4, 'site-4')")
+        .run();
+      await db
+        .prepare(
+          `WITH RECURSIVE ids(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM ids WHERE i < 2001)
+        INSERT INTO visits SELECT 'backlog-' || i, 4, ?, '/article', '', '', '', '' FROM ids`,
+        )
+        .bind(day + 1000)
+        .run();
+      await db
+        .prepare(
+          "INSERT INTO limited_analytics_retention (site_pk, managed_from_ms, sealed_before_ms, next_day_ms, phase, processing_day_ms) VALUES (4, ?, ?, ?, 'aggregated', ?)",
+        )
+        .bind(day, day + 86400000, day, day)
+        .run();
+      await runLimitedRetention({ DB: db } as Env, now);
+      const pending = await db
+        .prepare(
+          "SELECT phase, last_error AS error FROM limited_analytics_retention WHERE site_pk = 4",
+        )
+        .first();
+      expect(pending).toMatchObject({
+        phase: "aggregated",
+        error: expect.stringContaining("Deletion pending"),
+      });
+      expect(
+        (
+          await db
+            .prepare("SELECT COUNT(*) AS count FROM visits WHERE site_pk = 4")
+            .first()
+        )?.count,
+      ).toBe(1);
+      await runLimitedRetention({ DB: db } as Env, now);
+      expect(
+        await db
+          .prepare(
+            "SELECT phase, last_error AS error FROM limited_analytics_retention WHERE site_pk = 4",
+          )
+          .first(),
+      ).toEqual({ phase: "idle", error: null });
+      expect(
+        (
+          await db
+            .prepare("SELECT COUNT(*) AS count FROM visits WHERE site_pk = 4")
+            .first()
+        )?.count,
+      ).toBe(0);
+      await db
+        .prepare("INSERT INTO site_identities VALUES (5, 'site-5')")
+        .run();
+      await db
+        .prepare(
+          "INSERT INTO limited_analytics_retention (site_pk, managed_from_ms, sealed_before_ms, next_day_ms) VALUES (5, ?, ?, ?)",
+        )
+        .bind(day, day, day)
+        .run();
+      await runLimitedRetention({ DB: db } as Env, day + 30.5 * 86400000);
+      expect(
+        await db
+          .prepare(
+            "SELECT phase, next_day_ms AS nextDay FROM limited_analytics_retention WHERE site_pk = 5",
+          )
+          .first(),
+      ).toEqual({ phase: "aggregated", nextDay: day });
+      await runLimitedRetention({ DB: db } as Env, now);
+      expect(
+        await db
+          .prepare(
+            "SELECT phase, next_day_ms AS nextDay FROM limited_analytics_retention WHERE site_pk = 5",
+          )
+          .first(),
+      ).toEqual({ phase: "idle", nextDay: day + 86400000 });
     } finally {
       await mf.dispose();
     }
