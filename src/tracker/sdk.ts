@@ -4,7 +4,7 @@
 // before the SDK. Do not turn these values into build-time string placeholders:
 // minifiers may constant-fold privacy branches before injection happens.
 
-import { sanitizeLimitedPayload } from "../lib/edge/collector/limited-analytics";
+import { sanitizeLimitedPayload } from "../lib/tracker-contract/limited-analytics";
 
 import { initAutoTrack } from "./auto-track";
 import { createPerformanceTracker } from "./performance";

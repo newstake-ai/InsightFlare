@@ -1,0 +1,21 @@
+[extend]
+useDefault = true
+
+[[rules]]
+id = "generic-api-key"
+
+  [[rules.allowlists]]
+  description = "Recharts comparison series names, not credentials"
+  condition = "AND"
+  regexTarget = "line"
+  paths = [ '''(^|/)packages/product-ui/src/charts/performance-trend-chart\.tsx$''' ]
+  regexes = [ '''^\s*dataKey="comparisonP(50|75|95)"\s*$''' ]
+
+  [[rules.allowlists]]
+  description = "Latency chart series names, not credentials"
+  condition = "AND"
+  regexTarget = "line"
+  paths = [ '''(^|/)packages/product-ui/src/charts/request-observation-trend-chart\.tsx$''' ]
+  regexes = [
+    '''^\s*(dataKey="p(50|75|95)LatencyMs"|: key === "p(50|75|95)LatencyMs")\s*$'''
+  ]

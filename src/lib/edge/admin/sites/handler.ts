@@ -4,6 +4,7 @@ import {
   compileD1Mutation,
   compileD1Query,
   createD1DatabaseClient,
+  createDatabaseRuntime,
   deleteFrom,
   eq,
   filter,
@@ -48,11 +49,9 @@ import { siteDeletionMutations } from "@/lib/edge/sites/site-deletion";
 import type { Env } from "@/lib/edge/types";
 import { clampString } from "@/lib/edge/utils";
 import { DEFAULT_SITE_SCRIPT_SETTINGS } from "@/lib/site-settings";
-
 function database(env: Env) {
   return createD1DatabaseClient(env.DB);
 }
-
 function siteByIdQuery(siteId: string) {
   const sites = scan(schema.sites);
   const matching = filter(sites, eq(sites.columns.id, param(siteId)));
@@ -129,12 +128,11 @@ export async function createSiteWithDefaultSettings(
   }
   return siteId;
 }
-async function filterReadableSitesForActor<T extends { id: string }>(
-  env: Env,
-  actor: Actor,
-  teamId: string,
-  sites: T[],
-): Promise<T[]> {
+async function filterReadableSitesForActor<
+  T extends {
+    id: string;
+  },
+>(env: Env, actor: Actor, teamId: string, sites: T[]): Promise<T[]> {
   if (actor.isAdmin) return sites;
   const team = await teamById(env, teamId);
   if (team?.ownerUserId === actor.user.id) return sites;
@@ -147,11 +145,10 @@ async function filterReadableSitesForActor<T extends { id: string }>(
 }
 export async function deleteSiteData(env: Env, siteId: string): Promise<void> {
   const client = database(env);
-  await env.DB.prepare(
-    "UPDATE limited_analytics_retention SET phase = 'deleted', sealed_before_ms = 9007199254740991, processing_day_ms = NULL WHERE site_pk = (SELECT site_pk FROM site_identities WHERE site_id = ?)",
-  )
-    .bind(siteId)
-    .run();
+  await createDatabaseRuntime(env.DB).run({
+    sql: "UPDATE limited_analytics_retention SET phase = 'deleted', sealed_before_ms = 9007199254740991, processing_day_ms = NULL WHERE site_pk = (SELECT site_pk FROM site_identities WHERE site_id = ?)",
+    bindings: [siteId],
+  });
   for (const mutation of siteDeletionMutations(siteId))
     await client.run(mutation);
   try {

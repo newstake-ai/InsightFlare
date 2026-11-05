@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { sanitizeLimitedPayload } from "@/lib/edge/collector/limited-analytics";
+import { sanitizeLimitedPayload } from "@/lib/tracker-contract/limited-analytics";
 
 describe("limited analytics", () => {
   it("retains approved campaign and event fields without client identity or URL parameters", () => {

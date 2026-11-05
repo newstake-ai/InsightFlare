@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 
 import { describe, expect, it } from "vitest";
 
+import { readLimitedHistory } from "@/lib/edge/analytics/limited-history";
 import { runLimitedRetention } from "@/lib/edge/scheduled-tasks/limited-retention";
 import type { Env } from "@/lib/edge/types";
 
@@ -41,6 +42,7 @@ describe("limited analytics retention on workerd", () => {
         "CREATE TABLE scheduled_task_schedule_state (task_key TEXT PRIMARY KEY, next_run_at INTEGER)",
         "CREATE TABLE site_identities (site_pk INTEGER PRIMARY KEY, site_id TEXT)",
         "CREATE TABLE sites (id TEXT PRIMARY KEY)",
+        "CREATE TABLE custom_event_names (id INTEGER PRIMARY KEY, site_pk INTEGER, name TEXT)",
         "CREATE TABLE visits (visit_id TEXT PRIMARY KEY, site_pk INTEGER, started_at INTEGER, pathname TEXT, referrer_host TEXT, utm_source TEXT, utm_medium TEXT, utm_campaign TEXT)",
         "CREATE TABLE custom_events (event_pk INTEGER PRIMARY KEY, event_name_id INTEGER, site_pk INTEGER, visit_id TEXT, occurred_at INTEGER)",
         "CREATE TABLE visit_hourly_rollups (site_pk INTEGER, hour_bucket INTEGER)",
@@ -76,6 +78,23 @@ describe("limited analytics retention on workerd", () => {
         .run();
       await runLimitedRetention({ DB: db } as Env, now);
       await runLimitedRetention({ DB: db } as Env, now);
+      const history = await readLimitedHistory(
+        { DB: db } as Env,
+        "site-1",
+        "2026-09",
+      );
+      expect(history.enabled).toBe(true);
+      expect(history.rows).toEqual([
+        { dimension: "event_total", value: "", total: 1 },
+        { dimension: "views", value: "", total: 1 },
+      ]);
+      expect(
+        (await readLimitedHistory({ DB: db } as Env, "unknown", "2026-09"))
+          .enabled,
+      ).toBe(false);
+      await expect(
+        readLimitedHistory({ DB: db } as Env, "site-1", "2026-13"),
+      ).rejects.toThrow("Invalid month");
       expect(
         (
           await db

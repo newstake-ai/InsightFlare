@@ -1,4 +1,4 @@
-import type { TrackerClientPayload } from "@/lib/edge/types";
+import type { TrackerClientPayload } from "./types";
 
 const SAFE_TEXT = /^[a-zA-Z0-9][a-zA-Z0-9 ._-]{0,63}$/;
 const EVENT_NAMES = new Set(["outbound_click", "click", "signup", "upgrade"]);
