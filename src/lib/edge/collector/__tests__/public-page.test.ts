@@ -114,6 +114,35 @@ describe("verified public page", () => {
     expect(JSON.stringify(leave)).not.toContain(publicPageToken);
   });
 
+  it("uses fixed labels for public pages without a signed token", async () => {
+    const request = new Request("https://collector.example/collect");
+    const trace = { id: "trace", source: "collect", acceptedAt: Date.now() };
+    const input = {
+      siteId,
+      hostname: "newstake.ai",
+      visitId: "visit",
+      kind: "pageview" as const,
+    };
+    const page = await createLimitedEnvelope(
+      request,
+      { ...input, pathname: "/privacy" },
+      trace,
+      "visitor-secret",
+    );
+    expect(page.client).toMatchObject({
+      pathname: "/privacy",
+      title: "Privacy",
+    });
+    const unknown = await createLimitedEnvelope(
+      request,
+      { ...input, pathname: "/unrecognized" },
+      trace,
+      "visitor-secret",
+    );
+    expect(unknown.client.pathname).toBe("/:redacted");
+    expect(unknown.client.title).toBeUndefined();
+  });
+
   it("rejects malformed and incorrectly scoped metadata", async () => {
     const claim = {
       site: siteId,
