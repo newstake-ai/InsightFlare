@@ -3,6 +3,33 @@ import { describe, expect, it } from "vitest";
 import { sanitizeLimitedPayload } from "@/lib/tracker-contract/limited-analytics";
 
 describe("limited analytics", () => {
+  it("treats malformed optional fields as empty instead of retaining them", () => {
+    expect(sanitizeLimitedPayload({ referrerUrl: 42 } as never)).toEqual({
+      referrerUrl: "",
+    });
+    const malformed = {
+      pathname: 42,
+      query: "",
+      referrerUrl: "not a url",
+      eventData: [],
+    };
+    expect(sanitizeLimitedPayload(malformed as never)).toEqual({
+      pathname: "/",
+      query: "",
+      referrerUrl: "",
+      eventData: {},
+    });
+    expect(
+      sanitizeLimitedPayload({
+        query: "utm_source=&utm_medium=email",
+        eventData: { target_domain: "EXAMPLE.COM", action: "click" },
+      }),
+    ).toEqual({
+      query: "utm_medium=email",
+      eventData: { target_domain: "example.com", action: "click" },
+    });
+  });
+
   it("redacts identifier-like paths and unapproved campaign and event data", () => {
     expect(
       sanitizeLimitedPayload({
@@ -75,6 +102,48 @@ describe("limited analytics site setting", () => {
 import { createLimitedEnvelope } from "@/lib/edge/collector/limited-envelope";
 
 describe("limited collector envelope", () => {
+  it("scopes event identifiers by site and day while dropping client timestamps", async () => {
+    const request = new Request("https://collector.example/collect");
+    const trace = {
+      id: "trace",
+      source: "collect",
+      acceptedAt: Date.UTC(2026, 0, 1),
+    };
+    const payload = {
+      kind: "custom_event" as const,
+      siteId: "site-a",
+      visitId: "visit",
+      eventId: "event",
+      startedAt: 1,
+      timestamp: 1,
+      eventName: "click",
+    };
+    const first = await createLimitedEnvelope(
+      request,
+      payload,
+      trace,
+      "test-secret",
+    );
+    const same = await createLimitedEnvelope(
+      request,
+      payload,
+      trace,
+      "test-secret",
+    );
+    const otherSite = await createLimitedEnvelope(
+      request,
+      { ...payload, siteId: "site-b" },
+      trace,
+      "test-secret",
+    );
+    expect(first.client.timestamp).toBe(trace.acceptedAt);
+    expect(first.client.startedAt).toBeUndefined();
+    expect(first.client.eventId).toBe(same.client.eventId);
+    expect(first.client.eventId).not.toBe(payload.eventId);
+    expect(first.client.eventId).not.toBe(otherSite.client.eventId);
+    expect(first.limited.visitorId).not.toBe(otherSite.limited.visitorId);
+  });
+
   it("converts request identity into site-scoped daily values before durable buffering", async () => {
     const request = new Request(
       "https://collector.example/collect?secret=token",

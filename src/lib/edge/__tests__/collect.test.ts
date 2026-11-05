@@ -10,7 +10,10 @@ import {
   handleCollectRequest,
 } from "@/lib/edge/collector/collect";
 import type * as SiteSettingsStoreModule from "@/lib/edge/sites/settings-store";
-import { readSiteTrackingConfig } from "@/lib/edge/sites/settings-store";
+import {
+  readAuthoritativeLimitedMode,
+  readSiteTrackingConfig,
+} from "@/lib/edge/sites/settings-store";
 import type {
   SiteSettingsJsonValue,
   SiteTrackingConfig,
@@ -831,6 +834,120 @@ describe("collect route", () => {
     expect(response.status).toBe(204);
     expect(env.INGEST_DO.idFromName).toHaveBeenCalledWith("site-1");
     expect(ctx.waitUntil).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects an empty site identity before reading settings", async () => {
+    const request = makeRuntimeRequest({
+      origin: "https://example.com",
+      body: await makePayload({ siteId: "   " }),
+    });
+    expect(
+      (await handleCollectRequest(request, env as never, ctx as never)).status,
+    ).toBe(204);
+    expect(readSiteTrackingConfigMock).not.toHaveBeenCalled();
+    expect(ctx.waitUntil).not.toHaveBeenCalled();
+  });
+
+  it("defaults a blank page path before forwarding a pageview", async () => {
+    const request = makeRuntimeRequest({
+      origin: "https://example.com",
+      body: await makePayload({ pathname: "" }),
+    });
+    expect(
+      (await handleCollectRequest(request, env as never, ctx as never)).status,
+    ).toBe(204);
+    expect((await readForwardedEnvelope()).client).toMatchObject({
+      pathname: "/",
+    });
+  });
+
+  it("honors authoritative limited mode when cached settings are stale", async () => {
+    vi.mocked(readAuthoritativeLimitedMode).mockResolvedValueOnce(true);
+    readSiteTrackingConfigMock.mockResolvedValue({
+      ...baseSettings,
+      limitedAnalytics: false,
+    });
+    const request = makeRuntimeRequest({
+      origin: "https://example.com",
+      body: await makePayload({
+        visitId: "46f9b1e1-8337-44e6-9d8a-49381146d975",
+        pathname: "/account/123456789",
+      }),
+    });
+    expect(
+      (await handleCollectRequest(request, env as never, ctx as never)).status,
+    ).toBe(204);
+    const forwarded = await readForwardedEnvelope();
+    expect(forwarded.client).toMatchObject({ pathname: "/account/:redacted" });
+    expect(forwarded.limited).toBeDefined();
+  });
+
+  it("forwards only sanitized limited-mode data and rejects invalid visit IDs", async () => {
+    readSiteTrackingConfigMock.mockResolvedValue({
+      ...baseSettings,
+      limitedAnalytics: true,
+    });
+    const uuid = "46f9b1e1-8337-44e6-9d8a-49381146d975";
+    const invalid = makeRuntimeRequest({
+      origin: "https://example.com",
+      body: await makePayload(),
+    });
+    expect(
+      (await handleCollectRequest(invalid, env as never, ctx as never)).status,
+    ).toBe(204);
+    expect(ctx.waitUntil).not.toHaveBeenCalled();
+    const request = makeRuntimeRequest({
+      origin: "https://example.com",
+      body: await makePayload({
+        visitId: uuid,
+        pathname: "/story/123456789",
+        query: "utm_source=email&email=private@example.com",
+        userId: "private",
+      }),
+    });
+    expect(
+      (await handleCollectRequest(request, env as never, ctx as never)).status,
+    ).toBe(204);
+    const forwarded = await readForwardedEnvelope();
+    expect(forwarded.client).toMatchObject({
+      pathname: "/story/:redacted",
+      query: "utm_source=email",
+    });
+    expect(JSON.stringify(forwarded)).not.toContain("private@example.com");
+    expect(JSON.stringify(forwarded)).not.toContain(uuid);
+  });
+
+  it("does not forward identity events in limited mode", async () => {
+    readSiteTrackingConfigMock.mockResolvedValue({
+      ...baseSettings,
+      limitedAnalytics: true,
+    });
+    const request = makeRuntimeRequest({
+      origin: "https://example.com",
+      body: await makePayload({ kind: "identify", userId: "person" }),
+    });
+    expect(
+      (await handleCollectRequest(request, env as never, ctx as never)).status,
+    ).toBe(204);
+    expect(readSiteTrackingConfigMock).toHaveBeenCalled();
+    expect(ctx.waitUntil).not.toHaveBeenCalled();
+    expect(env.REQUEST_ANALYTICS.writeDataPoint).not.toHaveBeenCalled();
+  });
+
+  it("honors do-not-track in limited mode even when regular settings allow it", async () => {
+    readSiteTrackingConfigMock.mockResolvedValue({
+      ...baseSettings,
+      limitedAnalytics: true,
+    });
+    const request = makeRuntimeRequest({
+      origin: "https://example.com",
+      headers: { dnt: "1" },
+      body: await makePayload(),
+    });
+    expect(
+      (await handleCollectRequest(request, env as never, ctx as never)).status,
+    ).toBe(204);
+    expect(ctx.waitUntil).not.toHaveBeenCalled();
   });
 
   it("forwards normalized pageview payloads to the ingest Durable Object", async () => {
