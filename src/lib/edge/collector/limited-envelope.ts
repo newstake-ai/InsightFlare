@@ -4,8 +4,7 @@ import type {
   IngestTracePayload,
   TrackerClientPayload,
 } from "@/lib/edge/types";
-
-import { sanitizeLimitedPayload } from "./limited-analytics";
+import { sanitizeLimitedPayload } from "@/lib/tracker-contract/limited-analytics";
 
 async function keyedHash(secret: string, parts: string[]): Promise<string> {
   const encoder = new TextEncoder();

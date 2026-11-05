@@ -1,4 +1,5 @@
 import { applyBlockingRulesPatch, parseBlockingRules } from "@/lib/blocking";
+import { createDatabaseRuntime } from "@/lib/db";
 import type { Env } from "@/lib/edge/types";
 import {
   DEFAULT_SITE_SCRIPT_SETTINGS,
@@ -14,7 +15,11 @@ function openCacheStorage(): CacheStorage | null {
   if (typeof globalThis !== "object" || !("caches" in globalThis)) {
     return null;
   }
-  const maybeCaches = (globalThis as { caches?: CacheStorage }).caches;
+  const maybeCaches = (
+    globalThis as {
+      caches?: CacheStorage;
+    }
+  ).caches;
   if (!maybeCaches || typeof maybeCaches.open !== "function") {
     return null;
   }
@@ -96,7 +101,6 @@ function serializeSiteTrackingConfig(
     autoTrackOutboundLinks: settings.autoTrackOutboundLinks,
     ignoreDoNotTrack: settings.ignoreDoNotTrack,
   };
-
   const parsedBlockingRules = parseBlockingRules(settings);
   if (parsedBlockingRules.fields.domains.source !== "versioned") {
     payload.domainWhitelist = settings.domainWhitelist;
@@ -107,7 +111,6 @@ function serializeSiteTrackingConfig(
   if (settings.blockingRules !== undefined) {
     payload.blockingRules = settings.blockingRules;
   }
-
   if (
     settings.performanceSampleRate !==
     DEFAULT_SITE_SCRIPT_SETTINGS.performanceSampleRate
@@ -126,21 +129,18 @@ function serializeSiteTrackingConfig(
   ) {
     payload.hostingProxyBlockingEnabled = settings.hostingProxyBlockingEnabled;
   }
-
   return payload;
 }
 export async function readAuthoritativeLimitedMode(
   env: Env,
   siteId: string,
 ): Promise<boolean> {
-  const row = await env.DB.prepare(
-    "SELECT 1 AS enabled FROM site_identities si JOIN limited_analytics_retention r ON r.site_pk = si.site_pk WHERE si.site_id = ? AND r.phase != 'deleted'",
-  )
-    .bind(siteId)
-    .first();
+  const row = await createDatabaseRuntime(env.DB).first({
+    sql: "SELECT 1 AS enabled FROM site_identities si JOIN limited_analytics_retention r ON r.site_pk = si.site_pk WHERE si.site_id = ? AND r.phase != 'deleted'",
+    bindings: [siteId],
+  });
   return Boolean(row);
 }
-
 export async function readSiteScriptSettings(
   env: Env,
   siteId: string,
@@ -155,21 +155,17 @@ export async function readSiteTrackingConfig(
 ): Promise<SiteTrackingConfig | null> {
   const normalizedSiteId = normalizeSiteSettingsKey(siteId);
   if (!normalizedSiteId) return null;
-
   const cached = await readSettingsFromCache(normalizedSiteId);
   if (cached) return cached;
-
   const kv = siteSettingsBinding(env);
   const raw = await kv.get(normalizedSiteId);
   if (raw == null) return null;
-
   let parsed: unknown = {};
   try {
     parsed = JSON.parse(raw) as unknown;
   } catch {
     parsed = {};
   }
-
   const normalized = normalizeSiteTrackingConfig({
     ...(parsed && typeof parsed === "object"
       ? (parsed as Record<string, unknown>)
@@ -192,7 +188,6 @@ export async function upsertSiteTrackingConfig(
   if (!normalizedSiteId) {
     throw new Error("siteId is required");
   }
-
   const existing = await readSiteTrackingConfig(env, normalizedSiteId);
   let source: Record<string, unknown> = {
     ...(existing ?? {}),

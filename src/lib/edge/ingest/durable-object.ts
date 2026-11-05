@@ -274,26 +274,25 @@ export class IngestDurableObject extends DurableObject {
   private async enableLimitedAnalytics(siteId: string): Promise<boolean> {
     return this.doState.blockConcurrencyWhile(async () => {
       if (this.limitedAnalytics) return true;
-      const buffered = this.sql.sqlOne<{ found: number }>(
+      const buffered = this.sql.sqlOne<{
+        found: number;
+      }>(
         "SELECT 1 AS found WHERE EXISTS (SELECT 1 FROM buffered_visits) OR EXISTS (SELECT 1 FROM buffered_custom_events)",
       );
       if (buffered) return false;
-      await this.doEnv.DB.prepare(
-        "INSERT OR IGNORE INTO site_identities (site_id) SELECT id FROM sites WHERE id = ?",
-      )
-        .bind(siteId)
-        .run();
+      await createDatabaseRuntime(this.doEnv.DB).run({
+        sql: "INSERT OR IGNORE INTO site_identities (site_id) SELECT id FROM sites WHERE id = ?",
+        bindings: [siteId],
+      });
       const start = Math.floor(Date.now() / 86400000) * 86400000;
-      await this.doEnv.DB.prepare(
-        `INSERT OR IGNORE INTO limited_analytics_retention (site_pk, managed_from_ms, sealed_before_ms, next_day_ms) SELECT si.site_pk, ?, ?, ? FROM site_identities si JOIN sites s ON s.id = si.site_id WHERE si.site_id = ? AND NOT EXISTS (SELECT 1 FROM visits v WHERE v.site_pk = si.site_pk) AND NOT EXISTS (SELECT 1 FROM custom_events e WHERE e.site_pk = si.site_pk) AND NOT EXISTS (SELECT 1 FROM visit_hourly_rollups h WHERE h.site_pk = si.site_pk) AND NOT EXISTS (SELECT 1 FROM archive_objects a WHERE a.site_pk = si.site_pk)`,
-      )
-        .bind(start, start, start, siteId)
-        .run();
-      const state = await this.doEnv.DB.prepare(
-        "SELECT 1 AS ok FROM limited_analytics_retention r JOIN site_identities si ON si.site_pk = r.site_pk WHERE si.site_id = ? AND r.phase != 'deleted'",
-      )
-        .bind(siteId)
-        .first();
+      await createDatabaseRuntime(this.doEnv.DB).run({
+        sql: `INSERT OR IGNORE INTO limited_analytics_retention (site_pk, managed_from_ms, sealed_before_ms, next_day_ms) SELECT si.site_pk, ?, ?, ? FROM site_identities si JOIN sites s ON s.id = si.site_id WHERE si.site_id = ? AND NOT EXISTS (SELECT 1 FROM visits v WHERE v.site_pk = si.site_pk) AND NOT EXISTS (SELECT 1 FROM custom_events e WHERE e.site_pk = si.site_pk) AND NOT EXISTS (SELECT 1 FROM visit_hourly_rollups h WHERE h.site_pk = si.site_pk) AND NOT EXISTS (SELECT 1 FROM archive_objects a WHERE a.site_pk = si.site_pk)`,
+        bindings: [start, start, start, siteId],
+      });
+      const state = await createDatabaseRuntime(this.doEnv.DB).first({
+        sql: "SELECT 1 AS ok FROM limited_analytics_retention r JOIN site_identities si ON si.site_pk = r.site_pk WHERE si.site_id = ? AND r.phase != 'deleted'",
+        bindings: [siteId],
+      });
       if (!state) {
         return false;
       }
