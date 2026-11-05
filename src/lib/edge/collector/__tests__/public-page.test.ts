@@ -130,6 +130,7 @@ describe("verified public page", () => {
     for (const publicPageToken of [
       "invalid",
       "a.b.c",
+      "a.a",
       "x".repeat(2049),
       await token({ ...claim, site: "another-site" }),
       await token({ ...claim, host: "other.example" }),
