@@ -2,6 +2,7 @@ name = "insightflare"
 main = "./src/server.ts"
 compatibility_date = "2026-03-01"
 workers_dev = true
+routes = [{ pattern = "analytics.newstake.ai", custom_domain = true }]
 compatibility_flags = ["nodejs_compat", "global_fetch_strictly_public"]
 
 [vars]
@@ -36,12 +37,12 @@ deleted_classes = ["DiagnosticsSampler"]
 [[d1_databases]]
 binding = "DB"
 database_name = "insightflare"
-database_id = "YOUR_D1_ID" # Change this to your own D1 database ID
+database_id = "135e261f-eacc-4197-be99-05e1ec6b5c24" # Change this to your own D1 database ID
 migrations_dir = "./migrations"
 
 [[kv_namespaces]]
 binding = "SITE_SETTINGS_KV"
-id = "YOUR_KV_ID" # Change this to your own KV namespace ID
+id = "641598bbfdc94d80b0a4896f6cfd5c42" # Change this to your own KV namespace ID
 
 [[analytics_engine_datasets]]
 binding = "REQUEST_ANALYTICS"
